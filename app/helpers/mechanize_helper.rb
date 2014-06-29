@@ -1,0 +1,2 @@
+module MechanizeHelper
+end
