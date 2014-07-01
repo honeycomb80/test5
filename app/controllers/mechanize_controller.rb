@@ -5,48 +5,64 @@ require "rubygems"
 require "open-uri"
 
 
-before_action :set_agent_get, only:[:get_articles]
-
 def get_articles(pg = 2, article_date = Date.today)
   agent = Mechanize.new
   tc = agent.get('http://www.techcrunch.com/')
-  article_pg_count = 0
+  # there are 20 articles/page, this counts them
+  article_pg_count = 0 
 
-
-  until article_date === Date.today - 10
+  # limit setter on pages/articles
+  until article_date === Date.today - 2 
     tc.root.css('li.river-block').each do |link|
-      if link['data-permalink'].nil?
-        pp link.css('a')[0]['href']
-        pp link.css('a')[0].text
+      # sometimes the link moves, this gets title & url regardless
+      if link['data-permalink'].nil? 
+        url = link.css('a')[0]['href']
+        title = link.css('a')[0].text
       else
-        pp link['data-permalink']
-        pp link['data-sharetitle']
+        url = link['data-permalink']
+        title = link['data-sharetitle']
       end
       article_date = link.css('time')[0]['datetime']
       article_date = Date.parse(article_date)
-      pp article_date
+      Article.create = (title: title, url: url, date: article_date)
       article_pg_count += 1
-      pp "Article: #{article_pg_count}"
+      # pp "Article: #{article_pg_count}"
       if article_pg_count == 20
         tc = tc.link_with(:href => %r{page/#{pg}}i).click
         tc
         pg += 1
         article_pg_count = 0
       end
-    end    
-  end
-end
-
-
-    
-      Article.create(title: link.text, url: link.href, date: Date.new(2014,6,24))
     end
   end
-
 end
 
-private
-  def set_agent_get
-    agent = Mechanize.new
-    tc = agent.get('http://www.techcrunch.com/')
+
+agent = Mechanize.new
+tc = agent.get('http://www.techcrunch.com')
+article_pg_count = 0
+
+tc.root.css('h2.post-title').take(1).each do |this|
+  @link  =  this.css('a')[0]['href']
+  title  =  this.css('a')[0].text
+  m_link =  this.css('a')[0]
+  url = Mechanize::Page::Link.new(m_link, agent, tc)
+  url = url.click
+  # pp url
+  article_pg_count += 1
+  puts "Article: #{article_pg_count}"
+end
+
+
+i = 0
+s_agent = Mechanize.new
+tc_article = s_agent.get(@link)
+text_elem = tc_article.at('div.article-entry')
+case text_elem
+when text_elem.css('div').each do |t|
+    print ""
   end
+when text_elem.css('p').each do |t|
+    pp t.text
+  end
+end
