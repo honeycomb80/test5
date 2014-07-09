@@ -1,28 +1,43 @@
 class MechanizeController < ApplicationController
 require "nokogiri"
 require "mechanize"
-require "rubygems"
 require "open-uri"
 
 
+# this checks to see if the article has already been included
+def tc_id_check(tc_id)
+  Article.find_by(tc_id: tc_id) != nil
+end
+
+# this gets the articles
 def get_article_data(pg = 2, article_date = Date.today)
   agent = Mechanize.new
   tc = agent.get('http://www.techcrunch.com')
   article_pg_count = 0
 
-  until article_date === Date.today - 2
+  until article_date === Date.today - 1
     # this gets the article date
     tc.root.css('li.river-block').each do |link|
+      tc_id = link['id']
       article_date = link.css('time')[0]['datetime']
       article_date = Date.parse(article_date)
+      # this gets the author
+      if link.css('div.byline a').text.empty?
+        a = link.css('div.byline').text
+        b = link.css('div.byline time').text
+        author = a.gsub(b, "")
+        author = author.gsub("by", "").strip
+      else
+        author = link.css('div.byline a').text
+      end
     end
     tc.root.css('h2.post-title').each do |this|
       # this gets the link
-      @link  =  this.css('a')[0]['href']
-      puts @link
+      link  =  this.css('a')[0]['href']
       # this gets the title
       title  =  this.css('a')[0].text
-      puts title
+      # this makes an article instance
+      Article.create(title: title, date: article_date, url: link, author: author, tc_id: tc_id)
       # this creates the mechanize object to the article for scraping later
       m_link =  this.css('a')[0]
       url = Mechanize::Page::Link.new(m_link, agent, tc)
@@ -33,7 +48,6 @@ def get_article_data(pg = 2, article_date = Date.today)
         tc = tc.link_with(:href => %r{page/#{pg}}i).click
         tc
         pg += 1
-        puts pg
         article_pg_count = 0
       end
     end
@@ -41,8 +55,8 @@ def get_article_data(pg = 2, article_date = Date.today)
 end
 
 
-# text stripper: I put in a URL for "link" to make it happen
-def strip_text(link)
+# text stripper: I swap a URL for "link" to make it happen
+def get_text(link)
   s_agent = Mechanize.new
   tc_article = s_agent.get(link)
   html_elem = tc_article.at('div.article-entry')
@@ -69,7 +83,7 @@ def fr_parens(word)
 end
 
 def bk_parens(word)
-  /\A\)|\}|\>/.match(word) != nil
+  /\Z\)|\}|\>/.match(word) != nil
 end
 
 # these check fronts, backs of words for other punctuation
@@ -79,6 +93,34 @@ end
 
 def check_bk(word)
   /\Z\,|\?|\!|\./.match(word) != nil
+end
+
+# this checks to see if it's a proper noun (to denote as brand)
+def proper(word)
+  /[[:upper:]]/.match(word) != nil
+end
+
+# this returns true if all words are capitalized (to denote as brand)
+def proper_two(array)
+  one   = array[0]
+  two   = array[1]
+  if proper(one) && proper(two)
+    true
+  else
+    false
+  end
+end
+
+# this returns true if all words are capitalized (to denote as brand)
+def proper_three(array)
+  one   = array[0]
+  two   = array[1]
+  three = array[2]
+  if proper(one) && proper(two) && proper(three)
+    true
+  else
+    false
+  end
 end
 
 # this checks a two-word array for punctuation problems
@@ -103,26 +145,33 @@ def check_three(array)
 end
 
 # this checks to see if it's google+
-def plus(word)
-  if /\Z+/.match(word).nil? == false
-    if /google/i.match(word).nil? == false
-      true
-    end
+def google_plus(word)
+  if /\Z+/.match(word) != nil && /google/i.match(word) != nil
+    true
   else
     false
   end
 end
 
-# this checks to see if it's a proper noun (to denote as brand)
-def proper(word)
-  /[[:upper:]]/.match(word).nil?
+def strip_punct(word)
+  # this strips most types of punctuation from the front of the word
+  if /\A\W/.match(word) != nil
+    unless /\A\.|\@|\#|\$/.match(word) != nil
+    word.gsub!(/\A\W/, "")
+    end
+  end
+  # this strips all types of punctuation from the end of the word, except Google+
+  if /\W\Z/.match(word) != nil
+    unless google_plus(word)
+    word.gsub!(/\W\Z/, "")
+    end
+  end
 end
 
 # this makes an array into smaller, 2 and 3 word arrays...
 # ...then returns an array of these smaller arrays.
-# It also checks them for punctuation and length problems.
-def make_phrase(array)
-  hold = []
+# It also checks them for punctuation and shortness problems.
+def make_word_phrase(array)
   array.each do |word|
     n = array.index(word)
     # creates a two word array
@@ -131,16 +180,92 @@ def make_phrase(array)
     if two_word[1].nil?
       two_word.clear
     else
-      hold << two_word
+      two_word.each do |c|
+        strip_punct(c)
+      end
+      if proper_two(two_word)
+        two_word.join(" ")
+        Wordbank.create(word: two_word, brand: true, headline: false)
+      else
+        two_word.join(" ")
+        Wordbank.create(word: two_word, brand: false, headline: false)
+      end
     end
     # creates a three word array
     three_word = array[n..n+2]
     check_three(three_word)
     if three_word[2].nil?
       three_word.clear
-    else      
-      hold << three_word
+    else
+      three_word.each do |c|
+        strip_punct(c)
+      end
+      if proper_three(three_word)
+        three_word.join(" ")
+        Wordbank.create(word: three_word, brand: true, headline: false)
+      else
+        three_word.join(" ")
+        Wordbank.create(word: three_word, brand: false, headline: false)
+      end
     end
   end
+end
 
+def make_title_phrase(array)
+  array.each do |word|
+    n = array.index(word)
+    # creates a two word array
+    two_word = array[n..n+1]
+    check_two(two_word)
+    if two_word[1].nil?
+      two_word.clear
+    else
+      two_word.each do |c|
+        strip_punct(c)
+      end
+      two_word.join(" ")
+      Wordbank.create(word: two_word, brand: false, headline: true)
+    end
+    # creates a three word array
+    three_word = array[n..n+2]
+    check_three(three_word)
+    if three_word[2].nil?
+      three_word.clear
+    else
+      three_word.each do |c|
+        strip_punct(c)
+      end
+      three_word.join(" ") 
+      Wordbank.create(word: three_word, brand: false, headline: true)
+    end
+  end
+end
+
+def make_week(date)
+  date = Date.parse(date)
+  until date > Date.today
+    # Week.create(week: date)
+    date += 7
+    puts date
+  end
+end
+
+def make_month(date)
+  month = Date.parse(date).month
+  year = Date.parse(date).year
+  date = Date.new(year,month,1)
+  until date > Date.today
+    # Month.create(month: date)
+    date = date >> 1
+    puts date
+  end
+end
+
+def make_year(date)
+  date = Date.parse(date).year
+  until date == Date.today.year
+    # Year.create(year: date)
+    date += 1
+    puts date
+  end
 end
